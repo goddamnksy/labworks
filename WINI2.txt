@@ -1,0 +1,169 @@
+///////////////////////////////////////////////////////////
+//	Test.cpp
+//
+#define  STRICT
+#define  WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
+
+#include <Windows.h>
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+
+int WINAPI  WinMain(
+    _In_ HINSTANCE hInstance,
+    _In_opt_ HINSTANCE, // hPrevInstance,
+    _In_ LPSTR, // lpCmdLine,
+    _In_ int nCmdShow
+)
+{
+
+    LPCTSTR szClass = TEXT("a;eohgqeruiopugoqeig");
+
+    WNDCLASS wc = { 0 };
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = szClass;
+
+    RegisterClass(&wc);
+
+    // Размеры окна и координаты, при которых оно окажется по центру экрана
+    const int wndW = 800;
+    const int wndH = 600;
+    int x = (GetSystemMetrics(SM_CXSCREEN) - wndW) / 2;
+    int y = (GetSystemMetrics(SM_CYSCREEN) - wndH) / 2;
+
+    // Create Main window
+    HWND hWnd = CreateWindow(szClass, TEXT("Test"), WS_OVERLAPPEDWINDOW,
+		x, y, wndW, wndH, NULL, NULL, hInstance, NULL);
+    if (hWnd == NULL) {
+	return -1;
+    }
+
+    ShowWindow(hWnd, nCmdShow);
+    // UpdateWindow(hWnd);
+
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) { // idle
+	DispatchMessage(&msg);
+    }
+
+    return 0;
+}
+//=========================================================
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    const int N       = 4;      // число прямоугольников: 4, 6 или 9
+    const int NO_CELL = -1;     // значение cur, когда ничего не подсвечено
+
+    // N -> столбцы x строки
+    int cols, rows;
+    switch (N) {
+    case 4:  cols = 2; rows = 2; break;
+    case 6:  cols = 3; rows = 2; break;
+    default: cols = 3; rows = 3; break;     // N == 9
+    }
+
+    // Прямоугольник ячейки с номером idx (0 .. N-1) в клиентских координатах
+    auto cellRect = [&](int idx) -> RECT {
+        RECT cl;
+        GetClientRect(hWnd, &cl);
+        RECT rc;
+        rc.left   = (idx % cols) * cl.right  / cols;
+        rc.right  = (idx % cols + 1) * cl.right  / cols;
+        rc.top    = (idx / cols) * cl.bottom / rows;
+        rc.bottom = (idx / cols + 1) * cl.bottom / rows;
+        return rc;
+    };
+
+    // Номер подсвеченной ячейки хранится в самом окне (глобальных переменных нет)
+    int cur = (int)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+
+    // Сменить подсвеченную ячейку: помечаем недействительными только старую и новую
+    auto setCur = [&](int to) {
+        if (to == cur)
+            return;
+        if (cur != NO_CELL) {
+            RECT rc = cellRect(cur);
+            InvalidateRect(hWnd, &rc, FALSE);
+        }
+        if (to != NO_CELL) {
+            RECT rc = cellRect(to);
+            InvalidateRect(hWnd, &rc, FALSE);
+        }
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, to);
+    };
+
+    switch (message) {
+
+    case WM_CREATE :
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, NO_CELL);
+        return 0;
+
+    case WM_MOUSEMOVE :
+    {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        int now = NO_CELL;
+        for (int i = 0; i < N; ++i) {
+            RECT rc = cellRect(i);
+            if (PtInRect(&rc, pt)) {
+                now = i;
+                break;
+            }
+        }
+        setCur(now);
+        return 0;
+    }
+
+    case WM_NCMOUSEMOVE :       // курсор над рамкой / заголовком
+        setCur(NO_CELL);
+        break;                  // дальше DefWindowProc
+
+    case WM_SIZE :              // сетка пересчитывается целиком
+        InvalidateRect(hWnd, NULL, FALSE);
+        break;
+
+    case WM_PAINT :
+    {
+        PAINTSTRUCT ps;
+        HDC hDC = BeginPaint(hWnd, &ps);
+
+        // 1. Недействительная область - цветом фона окна (кисть принадлежит системе)
+        FillRect(hDC, &ps.rcPaint, GetSysColorBrush(COLOR_WINDOW));
+
+        // 2. Подсвеченный прямоугольник, если он есть
+        if (cur != NO_CELL) {
+            RECT rc = cellRect(cur);
+            HBRUSH hBrsh = CreateSolidBrush(RGB(225, 215, 245));    // светло-сиреневый
+            FillRect(hDC, &rc, hBrsh);
+            DeleteObject(hBrsh);
+        }
+
+        // 3. Линии сетки
+        RECT cl;
+        GetClientRect(hWnd, &cl);
+
+        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(200, 200, 200));     // светло-серый
+        HPEN oPen = (HPEN)SelectObject(hDC, hPen);
+        for (int c = 1; c < cols; ++c) {
+            MoveToEx(hDC, c * cl.right / cols, 0, NULL);
+            LineTo  (hDC, c * cl.right / cols, cl.bottom);
+        }
+        for (int r = 1; r < rows; ++r) {
+            MoveToEx(hDC, 0, r * cl.bottom / rows, NULL);
+            LineTo  (hDC, cl.right, r * cl.bottom / rows);
+        }
+        SelectObject(hDC, oPen);
+        DeleteObject(hPen);
+
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
+    case WM_DESTROY :
+	PostQuitMessage(0);
+	return 0;
+    }
+
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+//=========================================================
